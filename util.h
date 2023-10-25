@@ -27,6 +27,10 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <arpa/inet.h>
+#include <iconv.h>
+#include <errno.h>
+
+#define SOURCE_VERSION_H "0.7" 
 
 #define tv2dbl(tv) ((tv).tv_sec + (tv).tv_usec / 1000000.0)
 struct timeval dbl2tv(double d);
@@ -38,6 +42,9 @@ void dump_hex(uint8_t *buf, int len);
 
 uint64_t get_uint48(uint8_t *buf);
 uint64_t ntohll(uint64_t a);
+char *gpt_utf16le2ascii(char *utf16le_str, size_t sz);
+unsigned char *string2ByteArray(char* input);
+
 #define htonll ntohll
 
 #endif /* __PSAN_UTIL_H__ */

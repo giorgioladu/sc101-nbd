@@ -19,75 +19,76 @@
 #include "psan.h"
 #include "psan_wireformat.h"
 
-char *strndup_x(const char *string, size_t n)
-{
-  char *ret;
-  int i;
-  if (!(ret = malloc(n)))
-    return NULL;
-  for (i = 0; string[i] && i < (n - 1); i++)
-    ret[i] = string[i];
-  ret[i] = 0;
-  return ret;
-}
+
+//char *strndup_x(const char *string, size_t n)
+//{
+  //char *ret;
+  //int i;
+  //if (!(ret = malloc(n)))
+    //return NULL;
+  //for (i = 0; string[i] && i < (n - 1); i++)
+    //ret[i] = string[i];
+  //ret[i] = 0;
+  //return ret;
+//}
 
 void psan_init(char *dev)
 {
     if (sock)
-	return;
+    return;
 
     if (!(sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)))
-	err(EXIT_FAILURE, "socket");
+    err(EXIT_FAILURE, "socket");
 
-    int bufsize = 8*1024*1024;
+    int bufsize = NET_BUFFER_SIZE*1024*1024;
 
 #ifndef SO_RCVBUFFORCE
 #define SO_RCVBUFFORCE SO_RCVBUF
 #endif
 
     if (setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, &bufsize, sizeof(bufsize)) != 0 && errno != EPERM)
-	warn("setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, %u)", bufsize);
+    warn("setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, %u)", bufsize);
 
 #ifndef SO_SNDBUFFORCE
 #define SO_SNDBUFFORCE SO_SNDBUF
 #endif
 
     if (setsockopt(sock, SOL_SOCKET, SO_SNDBUFFORCE, &bufsize, sizeof(bufsize)) != 0 && errno != EPERM)
-	warn("setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, %u)", bufsize);
+    warn("setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, %u)", bufsize);
 
     int on = 1;
 
     if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof(on)) != 0)
-	err(EXIT_FAILURE, "setsockopt(fd, SOL_SOCKET, SO_BROADCAST)");
+    err(EXIT_FAILURE, "setsockopt(fd, SOL_SOCKET, SO_BROADCAST)");
 
 #ifdef SO_BINDTODEVICE
     if (dev && (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)+1) < 0))
-	err(EXIT_FAILURE, "setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, %s)", dev);
+    err(EXIT_FAILURE, "setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, %s)", dev);
 #endif
 
-    if (bind(sock, (struct sockaddr *)&(struct sockaddr_in){ .sin_family=AF_INET, .sin_port=htons(20001) }, sizeof(struct sockaddr_in)) < 0 && errno != EADDRINUSE)
-	warn("bind(fd, {sa_family=AF_INET, sin_port=htons(20001)})");
+    if (bind(sock, (struct sockaddr *)&(struct sockaddr_in){ .sin_family=AF_INET, .sin_port=htons(NET_SAN_PORT) }, sizeof(struct sockaddr_in)) < 0 && errno != EADDRINUSE)
+    warn("bind(fd, {sa_family=AF_INET, sin_port=htons(20001)})");
 }
 
 void psan_cleanup(void)
 {
     if (sock)
-	close(sock);
+    close(sock);
 }
 
 struct disks_t *psan_find_disks(void)
 {
     struct sockaddr_in broadcast = {
-	.sin_family = AF_INET,
-	.sin_port   = htons(20001),
-	.sin_addr   = { .s_addr = INADDR_BROADCAST }
+    .sin_family = AF_INET,
+    .sin_port   = htons(NET_SAN_PORT),
+    .sin_addr   = { .s_addr = INADDR_BROADCAST }
     };
     socklen_t broadcast_len = sizeof(struct sockaddr_in);
 
     /* send broadcast FIND message */
     uint16_t expected_seq = psan_next_seq();
     struct psan_find_t find = {
-	.ctrl = { .cmd = PSAN_FIND, .seq = htons(expected_seq) }
+    .ctrl = { .cmd = PSAN_FIND, .seq = htons(expected_seq) }
     };
     size_t find_len = sizeof(struct psan_find_t);
     sendto(sock, (void *)&find, find_len, 0, (struct sockaddr *)&broadcast, broadcast_len);
@@ -99,24 +100,24 @@ struct disks_t *psan_find_disks(void)
 
     while ((pfr = wait_for_packet(sock, PSAN_FIND_RESPONSE, expected_seq, sizeof(struct psan_find_response_t), &timeout, NULL, 0)))
     {
-	/* subsequent responses within 1/10 of a second of the fastest */
-	if (!disks)
-	{
-	    disks = malloc(sizeof(struct disks_t));
-	    bzero(disks, sizeof(struct disks_t));
-	    SLIST_INIT(disks);
-	    timeout = (struct timeval){ .tv_sec = 0, .tv_usec = 100000 };
-	}
+    /* subsequent responses within 1/10 of a second of the fastest */
+    if (!disks)
+    {
+        disks = malloc(sizeof(struct disks_t));
+        bzero(disks, sizeof(struct disks_t));
+        SLIST_INIT(disks);
+        timeout = (struct timeval){ .tv_sec = 0, .tv_usec = 100000 };
+    }
 
-	struct disk_t *disk = dup_struct(struct disk_t,
-	    .root_addr = (struct sockaddr_in){
-		.sin_family = AF_INET,
-		.sin_port = htons(20001),
-		.sin_addr = pfr->ip4
-	    }
-	);
+    struct disk_t *disk = dup_struct(struct disk_t,
+        .root_addr = (struct sockaddr_in){
+        .sin_family = AF_INET,
+        .sin_port = htons(NET_SAN_PORT),
+        .sin_addr = pfr->ip4
+        }
+    );
 
-	SLIST_INSERT_HEAD(disks, disk, entries);
+    SLIST_INSERT_HEAD(disks, disk, entries);
     }
 
     return disks;
@@ -128,8 +129,8 @@ void free_disks(struct disks_t *disks)
 
     while ((disk = SLIST_FIRST(disks)))
     {
-	SLIST_REMOVE_HEAD(disks, entries);
-	free(disk);
+    SLIST_REMOVE_HEAD(disks, entries);
+    free(disk);
     }
 
     free(disks);
@@ -139,10 +140,11 @@ struct disk_info_t *psan_query_disk(struct sockaddr_in *dest)
 {
     /* query disk information from root IP */
     uint16_t expected_seq = psan_next_seq();
+
     struct psan_get_t get = {
-	.ctrl = { .cmd = PSAN_GET, .seq = htons(expected_seq), .len_power = 9 },
-	.sector = 0,
-	.info = 0
+    .ctrl = { .cmd = PSAN_GET, .seq = htons(expected_seq), .len_power = 9 },
+    .sector = 0,
+    .info = 0
     };
     size_t get_len = sizeof(struct psan_get_t);
     sendto(sock, (void *)&get, get_len, 0, (struct sockaddr *)dest, sizeof(struct sockaddr_in));
@@ -151,14 +153,14 @@ struct disk_info_t *psan_query_disk(struct sockaddr_in *dest)
     struct psan_get_response_disk_t *ret;
 
     if (!(ret = wait_for_packet(sock, PSAN_GET_RESPONSE, expected_seq, sizeof(struct psan_get_response_disk_t), &timeout, NULL, 0)))
-	return NULL;
+    return NULL;
 
     return dup_struct(struct disk_info_t,
-	.version    = strndup_x(ret->version, sizeof(ret->version)),
-	.label      = strndup_x(ret->label, sizeof(ret->label)),
-	.total_size = get_uint48(ret->sector_total) << 9,
-	.free_size  = get_uint48(ret->sector_free) << 9,
-	.partitions = ret->partitions
+    .version    = strdup(ret->version),
+    .label      = gpt_utf16le2ascii(ret->label, sizeof(ret->label)),
+    .total_size = get_uint48(ret->sector_total) << 9,
+    .free_size  = get_uint48(ret->sector_free) << 9,
+    .partitions = ret->partitions
     );
 }
 
@@ -174,7 +176,7 @@ struct part_info_t *psan_query_part(struct sockaddr_in *dest)
     /* query partition information from root IP */
     uint16_t expected_seq = psan_next_seq();
     struct psan_identify_t identify = {
-	.ctrl = { .cmd = PSAN_IDENTIFY, .seq = htons(expected_seq) },
+    .ctrl = { .cmd = PSAN_IDENTIFY, .seq = htons(expected_seq) },
     };
     size_t identify_len = sizeof(struct psan_identify_t);
     sendto(sock, (void *)&identify, identify_len, 0, (struct sockaddr *)dest, sizeof(struct sockaddr_in));
@@ -183,12 +185,12 @@ struct part_info_t *psan_query_part(struct sockaddr_in *dest)
     struct psan_get_response_partition_t *ret;
 
     if (!(ret = wait_for_packet(sock, PSAN_GET_RESPONSE, expected_seq, sizeof(struct psan_get_response_disk_t), &timeout, NULL, 0)))
-	return NULL;
+    return NULL;
 
     return dup_struct(struct part_info_t,
-	.id    = strndup_x(ret->id, sizeof(ret->id)),
-	.label = strndup_x(ret->label, sizeof(ret->label)),
-	.size  = get_uint48(ret->sector_size) << 9
+    .id    = strdup(ret->id),
+    .label = strdup(ret->label),
+    .size  = get_uint48(ret->sector_size) << 9
     );
 }
 
@@ -197,9 +199,9 @@ struct part_info_t *psan_query_root(struct sockaddr_in *dest, int partition)
     /* query partition information from root IP */
     uint16_t expected_seq = psan_next_seq();
     struct psan_get_t get = {
-	.ctrl = { .cmd = PSAN_GET, .seq = htons(expected_seq), .len_power = 9 },
-	.sector = htonl(partition),
-	.info = 0
+    .ctrl = { .cmd = PSAN_GET, .seq = htons(expected_seq), .len_power = 9 },
+    .sector = htonl(partition),
+    .info = 0
     };
     size_t get_len = sizeof(struct psan_get_t);
     sendto(sock, (void *)&get, get_len, 0, (struct sockaddr *)dest, sizeof(struct sockaddr_in));
@@ -208,12 +210,12 @@ struct part_info_t *psan_query_root(struct sockaddr_in *dest, int partition)
     struct psan_get_response_partition_t *ret;
 
     if (!(ret = wait_for_packet(sock, PSAN_GET_RESPONSE, expected_seq, sizeof(struct psan_get_response_disk_t), &timeout, NULL, 0)))
-	return NULL;
+    return NULL;
 
     return dup_struct(struct part_info_t,
-	.id    = strndup_x(ret->id, sizeof(ret->id)),
-	.label = strndup_x(ret->label, sizeof(ret->label)),
-	.size  = get_uint48(ret->sector_size) << 9
+    .id    = strdup(ret->id),
+    .label = strdup(ret->label),
+    .size  = get_uint48(ret->sector_size) << 9
     );
 }
 
@@ -227,16 +229,16 @@ void free_part_info(struct part_info_t *part_info)
 struct part_addr_t *psan_resolve_id(char *id)
 {
     struct sockaddr_in broadcast = {
-	.sin_family = AF_INET,
-	.sin_port   = htons(20001),
-	.sin_addr   = { .s_addr = INADDR_BROADCAST }
+    .sin_family = AF_INET,
+    .sin_port   = htons(NET_SAN_PORT),
+    .sin_addr   = { .s_addr = INADDR_BROADCAST }
     };
     socklen_t broadcast_len = sizeof(struct sockaddr_in);
 
     /* query partition information from root IP */
     uint16_t expected_seq = psan_next_seq();
     struct psan_resolve_t resolve = {
-	.ctrl = { .cmd = PSAN_RESOLVE, .seq = htons(expected_seq) },
+    .ctrl = { .cmd = PSAN_RESOLVE, .seq = htons(expected_seq) },
     };
     size_t resolve_len = sizeof(struct psan_resolve_t);
     strncpy(resolve.id, id, sizeof(resolve.id));
@@ -248,15 +250,15 @@ struct part_addr_t *psan_resolve_id(char *id)
     socklen_t from_len = sizeof(from);
 
     if (!(ret = wait_for_packet(sock, PSAN_RESOLVE_RESPONSE, expected_seq, sizeof(struct psan_resolve_response_t), &timeout, (struct sockaddr *)&from, &from_len)))
-	return NULL;
+    return NULL;
 
     return dup_struct(struct part_addr_t,
-	.root_addr = from,
-	.part_addr = (struct sockaddr_in){
-	    .sin_family = AF_INET,
-	    .sin_port = htons(20001),
-	    .sin_addr = ret->ip4
-	}
+    .root_addr = from,
+    .part_addr = (struct sockaddr_in){
+        .sin_family = AF_INET,
+        .sin_port = htons(NET_SAN_PORT),
+        .sin_addr = ret->ip4
+    }
     );
 }
 
@@ -272,14 +274,14 @@ uint16_t psan_next_seq(void)
 
     if (seq & (1 << 15))
     {
-	srand(time(NULL) ^ getpid());
-	seq = rand() % (1 << 15);
+    srand(time(NULL) ^ getpid());
+    seq = rand() % (1 << 15);
     }
 
     seq++;
 
     if (seq & (1 << 15))
-	seq = 0;
+    seq = 0;
 
     return seq;
 }
@@ -292,28 +294,30 @@ void *wait_for_packet(int sock, uint8_t cmd, uint16_t seq, uint16_t len, struct 
 
     for (;;)
     {
-	FD_ZERO(&set);
-	FD_SET(sock, &set);
+    FD_ZERO(&set);
+    FD_SET(sock, &set);
 
-	if ((ret = select(sock+1, &set, NULL, NULL, timeout)) < 0)
-	    err(EXIT_FAILURE, "select");
+    if ((ret = select(sock+1, &set, NULL, NULL, timeout)) < 0)
+        err(EXIT_FAILURE, "select");
 
-	if (!ret)
-	    break;
+    if (!ret)
+        break;
 
-	if ((ret = recvfrom(sock, buf, sizeof(buf), 0, from, from_len)) < 0)
-	    err(EXIT_FAILURE, "recv");
+    if ((ret = recvfrom(sock, buf, sizeof(buf), 0, from, from_len)) < 0)
+        err(EXIT_FAILURE, "recv");
 
-	if (ret < sizeof(struct psan_ctrl_t))
-	    continue;
+    if (ret < sizeof(struct psan_ctrl_t))
+        continue;
 
-	struct psan_ctrl_t *ctrl = (struct psan_ctrl_t *)buf;
+    struct psan_ctrl_t *ctrl = (struct psan_ctrl_t *)buf;
 
-	if (ret != len || ctrl->cmd != cmd || ntohs(ctrl->seq) != seq)
-	    continue;
+    if (ret != len || ctrl->cmd != cmd || ntohs(ctrl->seq) != seq)
+        continue;
 
-	return buf;
+    return buf;
     }
 
     return NULL;
 }
+
+
