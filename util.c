@@ -76,4 +76,69 @@ uint64_t ntohll(uint64_t a)
     return ((uint64_t) lo) << 32U | hi;
 }
 
+char *gpt_utf16le2ascii(char *utf16le_str, size_t sz) {
+
+  iconv_t cd;
+  int     rc;
+  char   *p;
+  size_t  sz_in, sz_out;
+  char   *str_out;
+  size_t  conv_sz;
+
+  // ASCII string is shorter than UTF16
+  sz_out = sz;
+  str_out = (char *)malloc(sz_out);
+  if (!str_out) {
+    fprintf(stderr, "malloc(%zu): %m (%d)\n", sz, errno);
+    return 0;
+  }
+
+  cd = iconv_open("ASCII", "UTF-16LE");
+  if (cd == (iconv_t)-1) {
+    fprintf(stderr, "iconv_open(): %m (%d)\n", errno);
+    free(str_out);
+    return 0;
+  }
+
+  sz_in = sz;
+  //str_in = utf16le_str;
+  p = str_out;
+  conv_sz = iconv(cd, &utf16le_str, &sz_in, &p, &sz_out);
+  if (conv_sz == (size_t)-1) {
+    fprintf(stderr, "iconv(): %m (%d)\n", errno);
+    free(str_out);
+    iconv_close(cd);
+    return 0;
+  }
+
+  str_out[sz-sz_out] = '\0';
+
+  rc = iconv_close(cd);
+  if (rc == -1) {
+    fprintf(stderr, "iconv_open(): %m (%d)\n", errno);
+    free(str_out);
+    return 0;
+  }
+
+  return str_out;
+}
+
+
+//function to convert string to byte array
+unsigned char *string2ByteArray(char* input)
+{
+    int i,loop;
+    unsigned char output[sizeof(input)];
+    
+
+    loop = 0;
+    i = 0;
+
+    while (input[loop] != '\0') {
+        output[i++] = input[loop++];
+    }
+    
+    return output;
+}
+
 #define htonll ntohll

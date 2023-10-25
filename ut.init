@@ -9,7 +9,7 @@
 # Source function library.
 . /etc/init.d/functions
 
-UT=/sbin/ut
+UT=/usr/sbin/ut
 UTTAB=/etc/uttab
 
 # Check to make sure we have the needed files
@@ -19,71 +19,93 @@ UTTAB=/etc/uttab
 retval=0
 
 start() {
-	echo -n $"Starting ut: "
+    echo -e $"Starting ut: \n"
 
-	modprobe nbd
-	let retval+=$?
+    modprobe nbd max_part=5
+    let retval+=$?
 
-	while read dev uuid interface; do
-	    [ -z "$dev" -o "${dev#\#}" != "$dev" ] && continue
+    while read dev uuid interface; do
+        [ -z "$dev" -o "${dev#\#}" != "$dev" ] && continue
 
-	    if [ "${uuid#UUID=}" != "$uuid" -o "${#uuid}" == "36" ]
-	    then
-		uuid="${uuid#UUID=}"
-	    else
-		uuid=$($UT listall | fgrep -w "${uuid#LABEL=}" | awk '{print $1}')
-	    fi
+        if [ "${uuid#UUID=}" != "$uuid" -o "${#uuid}" == "36" ]
+        then
+        uuid="${uuid#UUID=}"
+        else
+        uuid=$($UT listall | grep -F -w "${uuid#LABEL=}" | awk '{print $1}')
+        fi
 
-	    if fuser -0 -k $dev >/dev/null 2>&1
-	    then
-		echo "$dev already attached!";
-		continue
-	    fi
+        #if fuser -0 -k $dev >/dev/null 2>&1
+        #then
+        #echo "$dev already attached!";
+        #continue
+        #fi
 
-	    args=""
-	    [ -n "$interface" ] && args="$args -d $interface"
-	    $UT $args attach $uuid $dev
+        echo -e "dev: $dev  uuid: ${uuid#LABEL=}  interface: $interface attached \n"
 
-	    let retval+=$?
-	done < /etc/uttab
+        args=""
+        [ -n "$interface" ] && args="$args -d $interface"
+        
+        #attach devices 
+        $UT $args attach $uuid $dev
+        
+        #disable scheduler
+       
+	echo none > /sys/block/$(basename $dev)/queue/scheduler
+		
+        let retval+=$?
+    done < /etc/uttab
 
-	[ "$retval" -eq 0 ] && success $"Starting ut: " || failure $"Starting ut: "
-	echo
+    [ "$retval" -eq 0 ] && success $"Starting ut: " || failure $"Starting ut: "
+    echo
 
-	return $retval
+    return $retval
 }
 
 stop() {
-	echo -n $"Shutting down ut: "
+    echo -n $"Shutting down ut: "
+    sync
+    killall ut
 
-	for dev in /dev/nbd*
-	do
-	    fuser -k $dev >/dev/null 2>&1
-	done
+    while read dev uuid interface; do
+        [ -z "$dev" -o "${dev#\#}" != "$dev" ] && continue
 
-	success $"Shutting down ut: "
-	echo
+        pid_in_use=$(fuser -0 $dev | awk '{print $1}')
+        if [ ${#pid_in_use} -gt 0] ; then
+           echo "file in use"
+           kill $pid_in_use
+        else
+           echo "file not in use"
+        fi
+
+        let retval+=$?
+    done < /etc/uttab
+    echo -e "\n"
+    echo -e "rmmod nbd : OK \n";
+    rmmod nbd
+
+    success $"Shutting down ut: "
+    echo
 }
 
 case "$1" in
     start)
-	start
-	;;
+    start
+    ;;
     stop)
-	stop
-	;;
+    stop
+    ;;
     status)
-	;;
+    ;;
     restart)
-	stop
-	start
-	;;
+    stop
+    start
+    ;;
     reload)
-	;;
+    ;;
     *)
-	echo "Usage: $0 {start|stop|status|reload|restart[|probe]"
-	exit 1
-	;;
+    echo "Usage: $0 {start|stop|status|reload|restart[|probe]"
+    exit 1
+    ;;
 esac
 
 exit $?

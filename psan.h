@@ -5,7 +5,7 @@
  *  it under the terms of the GNU General Public License as published by
  *  the Free Software Foundation; either version 2 of the License, or
  *  (at your option) any later version.
- *
+ *I/O error, dev nbd0, sector 136 op 0x0:(READ) flags 0x80700 phys_seg 14 prio class 2
  *  This program is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
@@ -19,6 +19,10 @@
 #ifndef __PSAN_H__
 #define __PSAN_H__
 
+#define NET_BUFFER_SIZE 48 // kb [this is the size of internal buffer used by worker to send data  ( KERNEL QUEUE TO NONE!! ) ]
+#define NET_SAN_PORT 20001 // UDP port 
+
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <err.h>
@@ -48,6 +52,9 @@ struct disk_info_t {
     uint64_t total_size;
     uint64_t free_size;
     uint8_t partitions;
+    // other
+    //uint8_t manufacturer_code;
+   // uint8_t unknown1;
 };
 
 struct part_addr_t {
@@ -58,6 +65,7 @@ struct part_addr_t {
 struct part_info_t {
     char *id;
     char *label;
+    bool mirror;
     uint64_t size;
 };
 
@@ -79,5 +87,6 @@ void free_part_addr(struct part_addr_t *part_addr);
 
 uint16_t psan_next_seq(void);
 void *wait_for_packet(int sock, uint8_t cmd, uint16_t seq, uint16_t len, struct timeval *timeout, struct sockaddr *from, socklen_t *from_len);
+
 
 #endif /* __PSAN_H__ */
