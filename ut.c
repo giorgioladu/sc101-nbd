@@ -16,116 +16,36 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <fcntl.h>
-#include <sys/ioctl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <limits.h>
-#include <errno.h>
-#include <syslog.h>
+#include "ut.h"
 
-#include "queue.h"
-
-#if USE_NBD
-#include "nbd.h"
-#endif
-
-#include "psan.h"
-#include "psan_wireformat.h"
-#include "util.h"
-
-#define DIE(...) do {               \
-    syslog(LOG_ERR, __VA_ARGS__);   \
-    err(EXIT_FAILURE, __VA_ARGS__); \
-} while (0)
-
-#ifndef TEMP_FAILURE_RETRY
-#define TEMP_FAILURE_RETRY(expression) expression
-#endif
-
-#define _select(...) TEMP_FAILURE_RETRY(select(__VA_ARGS__))
-#define _read(...) TEMP_FAILURE_RETRY(read(__VA_ARGS__))
-#define _recv(...) TEMP_FAILURE_RETRY(recv(__VA_ARGS__))
-#define _sendmsg(...) TEMP_FAILURE_RETRY(sendmsg(__VA_ARGS__))
-#define _sendto(...) TEMP_FAILURE_RETRY(sendto(__VA_ARGS__))
 
 int sock;
 int debug = 0;
+/* open NBD device */
+int nbd_fd;
 
-struct outstanding_t {
-    struct nbd_request *nbd;
-    uint16_t seq;
-    void *psan;
-    int psan_len;
-    struct timeval timeout;
-    TAILQ_ENTRY(outstanding_t) entries;
-};
-
-static TAILQ_HEAD(, outstanding_t) outstanding = TAILQ_HEAD_INITIALIZER(outstanding);
-
-void record_outstanding(struct outstanding_t *out)
-{
-    gettimeofday(&out->timeout, NULL);
-
-    /* 1 second timeout */
-    out->timeout.tv_sec++;
-
-    TAILQ_INSERT_TAIL(&outstanding, out, entries);
-}
-
-struct outstanding_t *remove_outstanding(uint16_t seq)
-{
-    struct outstanding_t *out;
-
-    TAILQ_FOREACH(out, &outstanding, entries)
-    {
-	if (out->seq != seq)
-	    continue;
-
-	TAILQ_REMOVE(&outstanding, out, entries);
-
-	return out;
-    }
-
-    return NULL;
-}
-
-void resubmit_outstanding(int sock, struct sockaddr_in *dest)
-{
-    struct timeval now, timeout;
-    gettimeofday(&now, NULL);
-
-    /* 1 second timeout */
-    timeout = now;
-    timeout.tv_sec++;
-
-    struct outstanding_t *out = TAILQ_FIRST(&outstanding);
-
-    while (out)
-    {
-	struct outstanding_t *next = TAILQ_NEXT(out, entries);
-
-	/* stop at first future timeout */
-	if (timercmp(&out->timeout, &now, >))
-	    break;
-
-	/* resubmit original request */
-	if (_sendto(sock, out->psan, out->psan_len, 0, (struct sockaddr *)dest, sizeof(struct sockaddr_in)) < 0)
-	    err(EXIT_FAILURE, "sendto");
-
-	/* update timeout and move entry to end of list */
-	out->timeout = timeout;
-	TAILQ_REMOVE(&outstanding, out, entries);
-	TAILQ_INSERT_TAIL(&outstanding, out, entries);
-
-	out = next;
-    }
-}
 
 void usage(void)
 {
-    fprintf(stderr, "usage: ut OPTIONS\n");
-
+    printf("\nUsage: ut [options] [command] [san_uuid] [block_devices]");
+    printf("\nThe ut command is used to manage PSAN devices such as the Netgear SC101. ");
+    printf("\n");
+    printf("[options]\n");
+    printf("\t-d Select the eth device connected at same net of the SAN disk.\n");
+    printf("\t-D Enable debug mode.\n");
+    printf("[command]\n");
+     printf("\t listall | list ( Query available PSAN partitions. )\n");
+     printf("\t attach ( Attach PSAN partition identified by partition-id to an NDB block device.)\n");
+    printf("[san_uuid]\n");
+    printf("\tSAN partition identified by partition-id to an NDB block device.\n");
+    printf("[block_devices]\n");
+    printf("\tNDB block device ( /dev/nbdN )\n");
+    printf("------------------------------------------");
+    printf("\n Version %s", ut_build_str);
+    printf("\n KERNEL_BUFFER_SIZE %s", KERNEL_BUFFER_SIZE);
+    printf("\n NET_BUFFER_SIZE %d", NET_BUFFER_SIZE);
+     printf("\n------------------------------------------\n");
+     printf("\n");
     exit(1);
 }
 
@@ -145,31 +65,37 @@ void psan_listall(void)
 	if (!(disk_info = psan_query_disk(&disk->root_addr)))
 	    goto cleanup_disk;
 
-	fprintf(stdout, "===============================================================================\n");
-	fprintf(stdout, "VERSION  : %-16s              ROOT IP ADDR : %-16s\n", disk_info->version, inet_ntoa(disk->root_addr.sin_addr));
-	fprintf(stdout, "TOTAL(MB): %-6.0f                        # PARTITIONS : %d\n", disk_info->total_size/1024.0/1024.0, disk_info->partitions);
-	fprintf(stdout, "FREE (MB): %-6.0f\n", disk_info->free_size/1024.0/1024.0);
+    fprintf(stdout, "===============================================================================\n");
+    fprintf(stdout, "VERSION  : %-16s              ROOT IP ADDR : %-16s\n", disk_info->version, inet_ntoa(disk->root_addr.sin_addr));
+    fprintf(stdout, "TOTAL(GB): %-6.2f                        # PARTITIONS : %d (  %-10s)\n", disk_info->total_size/1024.0/1024.0/1024.0, disk_info->partitions, disk_info->label);
+    fprintf(stdout, "FREE (MB): %-6.0f\n", disk_info->free_size/1024.0/1024.0);
 
-	for (int i = 1; i <= disk_info->partitions; i++)
-	{
-	    struct part_info_t *part_info = NULL;
-	    struct part_addr_t *part = NULL;
+    for (int i = 1; i <= disk_info->partitions; i++)
+    {
+        struct part_info_t *part_info = NULL;
+        struct part_addr_t *part = NULL;
+        char *mirror="N";
 
-	    if (i == 1)
-	    {
-		fprintf(stdout, "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\n");
-		fprintf(stdout, "PARTITION                                LABEL           IP ADDR      SIZE (MB)\n");
-	    }
+        if (i == 1)
+        {
+        fprintf(stdout, "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\n");
+        fprintf(stdout, "PARTITION                                   LABEL       MIR    IP ADDR      SIZE (GB)\n");
+        }
 
-	    if (!(part_info = psan_query_root(&disk->root_addr, i)))
-		goto cleanup_part;
+        if (!(part_info = psan_query_root(&disk->root_addr, i)))
+        goto cleanup_part;
 
-	    if (!(part = psan_resolve_id(part_info->id)))
-		goto cleanup_part;
+        if (!(part = psan_resolve_id(part_info->id)))
+        goto cleanup_part;
 
-	    fprintf(stdout, "%-40s %-15s %-15s %6.0f\n",
-		part_info->id, part_info->label, inet_ntoa(part->part_addr.sin_addr), part_info->size/1024.0/1024.0);
+        if (strstr(part_info->id,".m1")) //check mirror
+        mirror="Y";
 
+
+        fprintf(stdout, "%-40s %-15s %-5s %-15s %5.2f\n",
+        part_info->id, part_info->label, mirror, inet_ntoa(part->part_addr.sin_addr), part_info->size/1024.0/1024.0/1024.0);
+        
+        
 	cleanup_part:
 	    if (part)
 		free_part_addr(part);
@@ -291,28 +217,29 @@ void psan_write(char *id, long long offset, char *file)
 }
 
 #if USE_NBD
+
 void psan_attach_nbd(char *id, char *path)
 {
-    /* open NBD device */
-    int nbd_fd;
+
 
     if ((nbd_fd = open(path, O_RDWR)) < 0)
 	err(EXIT_FAILURE, "open");
 
     /* when the kernel does readahead or combines requests into blocks larger than 8kb, errors increase */
-    {
 	char filename[PATH_MAX];
 	char *device = rindex(path, '/');
 	snprintf(filename, sizeof(filename), "/sys/block/%s/queue/max_sectors_kb", device);
 	int sysfs;
 	if ((sysfs = open(filename, O_RDWR)) >= 0)
 	{
-	    if (write(sysfs, "8", sizeof("8")-1) < 0)
-	      warn("write(sysfs, \"8\", %u)", sizeof("8")-1);
+	    if (write(sysfs, KERNEL_BUFFER_SIZE, sizeof(KERNEL_BUFFER_SIZE)-1) < 0)
+	      warn("write(sysfs, \"KERNEL_BUFFER_SIZE\", %lu)", sizeof(KERNEL_BUFFER_SIZE)-1);
 
 	    close(sysfs);
 	}
-    }
+   
+    if ((nbd_fd = open(path, O_RDWR)) < 0)
+      err(EXIT_FAILURE, "open");
 
     /* resolve id to IP */
     struct part_addr_t *res;
@@ -359,7 +286,7 @@ void psan_attach_nbd(char *id, char *path)
     {
 	close(sock);
 	close(socks[0]);
-	close(socks[1]);
+	//close(socks[1]);
 
 	if (ioctl(nbd_fd, NBD_DO_IT) < 0)
 	    err(EXIT_FAILURE, "ioctl(NBD_DO_IT)");
@@ -375,20 +302,19 @@ void psan_attach_nbd(char *id, char *path)
 
     /* child */
     close(socks[0]);
-    close(nbd_fd);
+    //close(nbd_fd);
 
     int max = socks[1] > sock ? socks[1] : sock;
     fd_set set;
     int ret;
 
-    for (;;)
+    while(1)
     {
 	struct timeval *timeout = NULL;
 	struct timeval now;
 	gettimeofday(&now, NULL);
 
 	/* setup select timeout to handle resubmission */
-	{
 	    struct outstanding_t *out;
 
 	    if ((out = TAILQ_FIRST(&outstanding)))
@@ -399,8 +325,7 @@ void psan_attach_nbd(char *id, char *path)
 		next_timeout = dbl2tv(diff);
 		timeout = &next_timeout;
 	    }
-	}
-
+	
 	FD_ZERO(&set);
 	FD_SET(socks[1], &set);
 	FD_SET(sock, &set);
@@ -507,7 +432,8 @@ void psan_attach_nbd(char *id, char *path)
 
 	    if ((ret = _recv(sock, buf, sizeof(buf), 0)) < 0)
 		err(EXIT_FAILURE, "recv");
-
+		
+		
 	    if (ret < sizeof(struct psan_ctrl_t))
 		continue;
 
@@ -570,6 +496,31 @@ void psan_attach_nbd(char *id, char *path)
 
     return;
 }
+
+
+void psan_detach_nbd( char *path)
+{
+    if (nbd_fd < 0 )
+    err(EXIT_FAILURE, "not open");
+
+
+    if (ioctl(nbd_fd, NBD_CLEAR_QUE) < 0)
+        warn("ioctl(NBD_CLEAR_QUE)");
+
+    if (ioctl(nbd_fd, NBD_CLEAR_SOCK) < 0)
+        warn("ioctl(NBD_CLEAR_SOCK)");
+
+    if (ioctl(nbd_fd, NBD_DISCONNECT) < 0)
+        warn("ioctl(NBD_DISCONNECT)");
+
+
+    close(sock);
+    close( nbd_fd );
+
+    exit( EXIT_SUCCESS );
+}
+
+
 #endif
 
 int main(int argc, char *argv[])
@@ -602,6 +553,8 @@ int main(int argc, char *argv[])
     cmd = argv[optind++];
 
     if (!strcmp(cmd, "listall") && !args)
+	psan_listall();
+	else if (!strcmp(cmd, "list") && !args)
 	psan_listall();
     else if (!strcmp(cmd, "resolve") && args == 1)
 	psan_resolve(argv[optind]);
