@@ -18,6 +18,7 @@
 
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -25,7 +26,8 @@
 #include <errno.h>
 #include <syslog.h>
 
-#include "queue.h"
+//#include "queue.h"
+#include <sys/queue.h>
 
 #if USE_NBD
 #include "nbd.h"
@@ -36,6 +38,7 @@
 #include "util.h"
 
 #define UT_VERSION_NUM "0.8"
+#define INTERNAL_BUF_SIZE 65536
 
 #define DIE(...) do {               \
     syslog(LOG_ERR, __VA_ARGS__);   \
@@ -62,6 +65,7 @@ struct outstanding_t {
     struct timeval timeout;
     TAILQ_ENTRY(outstanding_t) entries;
 };
+
 static TAILQ_HEAD(, outstanding_t) outstanding = TAILQ_HEAD_INITIALIZER(outstanding);
 
 
@@ -85,12 +89,12 @@ struct outstanding_t *remove_outstanding(uint16_t seq)
 
     TAILQ_FOREACH(out, &outstanding, entries)
     {
-	if (out->seq != seq)
-	    continue;
+    if (out->seq != seq)
+        continue;
 
-	TAILQ_REMOVE(&outstanding, out, entries);
+    TAILQ_REMOVE(&outstanding, out, entries);
 
-	return out;
+    return out;
     }
 
     return NULL;
@@ -109,21 +113,21 @@ void resubmit_outstanding(int sock, struct sockaddr_in *dest)
 
     while (out)
     {
-	struct outstanding_t *next = TAILQ_NEXT(out, entries);
+        struct outstanding_t *next = TAILQ_NEXT(out, entries);
 
-	/* stop at first future timeout */
-	if (timercmp(&out->timeout, &now, >))
-	    break;
+        /* stop at first future timeout */
+        if (timercmp(&out->timeout, &now, >))
+            break;
 
-	/* resubmit original request */
-	if (_sendto(sock, out->psan, out->psan_len, 0, (struct sockaddr *)dest, sizeof(struct sockaddr_in)) < 0)
-	    err(EXIT_FAILURE, "sendto");
+        /* resubmit original request */
+        if (_sendto(sock, out->psan, out->psan_len, 0, (struct sockaddr *)dest, sizeof(struct sockaddr_in)) < 0)
+            err(EXIT_FAILURE, "sendto");
 
-	/* update timeout and move entry to end of list */
-	out->timeout = timeout;
-	TAILQ_REMOVE(&outstanding, out, entries);
-	TAILQ_INSERT_TAIL(&outstanding, out, entries);
+        /* update timeout and move entry to end of list */
+        out->timeout = timeout;
+        TAILQ_REMOVE(&outstanding, out, entries);
+        TAILQ_INSERT_TAIL(&outstanding, out, entries);
 
-	out = next;
+        out = next;
     }
 }

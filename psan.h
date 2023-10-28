@@ -19,7 +19,7 @@
 #ifndef __PSAN_H__
 #define __PSAN_H__
 
-#define KERNEL_BUFFER_SIZE "4" // kb [this is the size of internal buffer used by worker to send data  ( KERNEL QUEUE TO NONE!! ) ]
+#define KERNEL_BUFFER_SIZE "8" // kb [this is the size of internal buffer used by worker to send data  ( KERNEL QUEUE TO NONE!! ) ]
 #define NET_BUFFER_SIZE 4 // kb
 #define NET_SAN_PORT 20001 // UDP port
 
@@ -33,9 +33,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <errno.h>
-
-#include "queue.h"
-
+#include <sys/queue.h>
+//#include "queue.h"
 #include "util.h"
 
 extern int sock;
