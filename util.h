@@ -30,7 +30,6 @@
 #include <iconv.h>
 #include <errno.h>
 
-#define SOURCE_VERSION_H "0.7" 
 
 #define tv2dbl(tv) ((tv).tv_sec + (tv).tv_usec / 1000000.0)
 struct timeval dbl2tv(double d);
