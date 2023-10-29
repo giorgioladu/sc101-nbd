@@ -1,0 +1,126 @@
+#!/bin/bash
+
+# description: Attach/Detach ut mount points
+#
+
+UT=/usr/sbin/ut
+UTTAB=/etc/uttab
+
+# Check to make sure we have the needed files
+[ -x ${UT} ] || exit 1
+[ -s ${UTTAB} ] || exit 1
+
+retval=0
+
+start() {
+    echo -e "Starting ut: \n"
+
+    modprobe nbd max_part=5
+    retval=0;
+
+    while read dev uuid interface; do
+        [ -z "$dev" -o "${dev#\#}" != "$dev" ] && continue
+
+        if [ "${uuid#UUID=}" != "$uuid" -o "${#uuid}" == "36" ]
+        then
+        uuid="${uuid#UUID=}"
+        else
+        uuid=$($UT listall | grep -F -w "${uuid#LABEL=}" | awk '{print $1}')
+        fi
+
+        echo -e "dev: $dev  uuid: ${uuid#LABEL=}  interface: $interface attached \n"
+
+        args=""
+        [ -n "$interface" ] && args="$args -d $interface"
+
+        #attach devices
+        $UT $args attach $uuid $dev
+
+        #disable scheduler if have problem
+        #echo none > /sys/block/$(basename $dev)/queue/scheduler
+
+        retval+=$?
+    done < /etc/uttab
+
+    [ "$retval" -eq 0 ] &&  echo " Starting ut: success" || echo "Starting ut: failure"
+    echo -e "\n"
+
+    exit $retval
+}
+
+stop() {
+    echo "Shutting down ut: "
+    sync
+    killall ut
+    retval=0
+
+    while read dev uuid interface; do
+        [ -z "$dev" -o "${dev#\#}" != "$dev" ] && continue
+
+        pid_in_use=$(fuser -0 $dev | awk '{print $1}')
+        if [ $pid_in_use -gt 0 ]
+        then
+           echo "pid in use"
+           kill $pid_in_use
+        else
+           echo "pid not in use"
+        fi
+
+        retval+=$?
+    done < /etc/uttab
+    echo -e "\n"
+    echo -e "rmmod nbd : OK \n";
+    rmmod nbd
+
+    echo -e "Shutting down ut: success \n"
+    exit $retval
+}
+
+
+status() {
+    echo -e "Status ut: "
+
+    while read dev uuid interface; do
+        [ -z "$dev" -o "${dev#\#}" != "$dev" ] && continue
+
+        mount_in_use=$(mount | grep $dev )
+        echo -n "$uuid "
+        if [ "$mount_in_use" != "" ]
+        then
+            echo -n " link on $mount_in_use "
+        else
+            echo -n " not used "
+        fi
+        echo -e " \n"
+    done < /etc/uttab
+
+
+
+}
+
+
+case "$1" in
+    start)
+    start
+    ;;
+    stop)
+    stop
+    ;;
+    status)
+    status
+    ;;
+    restart)
+    stop
+    start
+    ;;
+    reload)
+    stop
+    start
+    ;;
+    *)
+    echo "Usage: $0 {start|stop|status|reload|restart"
+    exit 1
+    ;;
+esac
+
+exit $?

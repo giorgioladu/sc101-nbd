@@ -284,9 +284,9 @@ void psan_attach_nbd(char *id, char *path)
     /* parent */
     if (pid)
     {
-    close(sock);
-    close(socks[0]);
-    //close(socks[1]);
+        close(sock);
+        close(socks[0]);
+        close(socks[1]);
 
     if (ioctl(nbd_fd, NBD_DO_IT) < 0)
         err(EXIT_FAILURE, "ioctl(NBD_DO_IT)");
@@ -333,11 +333,11 @@ void psan_attach_nbd(char *id, char *path)
     if ((ret = _select(max+1, &set, NULL, NULL, timeout)) < 0)
         err(EXIT_FAILURE, "select");
 
-    if (FD_ISSET(socks[1], &set))
+    if (FD_ISSET(socks[1], &set)) //_read socks[1] and sendto sock !!
     {
         static char buf[INTERNAL_BUF_SIZE];//form 65536
         static int len = 0;
-        if ((ret = _read(socks[1], &buf[len], sizeof(buf)-len)) <= 0)
+        if ((ret = _read(socks[1], &buf[len], sizeof(buf)-len)) <= 0) //necessary for transfert file e data
         err(EXIT_FAILURE, "read");
 
         len += ret;
@@ -382,7 +382,7 @@ void psan_attach_nbd(char *id, char *path)
             struct psan_put_t *put;
             ptr_len = sizeof(struct psan_put_t) + nbd->len;
             if (!(ptr = put = malloc(ptr_len)))
-            err(EXIT_FAILURE, "malloc");
+                err(EXIT_FAILURE, "malloc");
             memset(ptr, 0, sizeof(struct psan_put_t));
 
             put->ctrl = (struct psan_ctrl_t){ .cmd = PSAN_PUT, .seq = htons(seq), .len_power = power };
@@ -396,7 +396,7 @@ void psan_attach_nbd(char *id, char *path)
             struct psan_get_t *get;
             ptr_len = sizeof(struct psan_get_t);
             if (!(ptr = get = malloc(ptr_len)))
-            err(EXIT_FAILURE, "malloc");
+                err(EXIT_FAILURE, "malloc");
             memset(ptr, 0, sizeof(struct psan_get_t));
 
             get->ctrl = (struct psan_ctrl_t){ .cmd = PSAN_GET, .seq = htons(seq), .len_power = power };
@@ -407,7 +407,7 @@ void psan_attach_nbd(char *id, char *path)
         else
             DIE("unknown operation");
 
-        if ((ret = _sendto(sock, ptr, ptr_len, 0, &res->part_addr, sizeof(res->part_addr))) < 0)
+        if ((ret = _sendto(sock, ptr, ptr_len, 0, &res->part_addr, sizeof(res->part_addr))) < 0) //send to sock!!
             err(EXIT_FAILURE, "sendto");
 
         record_outstanding(dup_struct(struct outstanding_t,
@@ -425,32 +425,29 @@ void psan_attach_nbd(char *id, char *path)
         len -= pos;
     }
 
-    if (FD_ISSET(sock, &set))
+    if (FD_ISSET(sock, &set)) //_recv to sock and send to socks[1]
     {
         uint8_t buf[INTERNAL_BUF_SIZE];//form 65536
 
         if ((ret = _recv(sock, buf, sizeof(buf), 0)) < 0)
-        err(EXIT_FAILURE, "recv");
+            err(EXIT_FAILURE, "recv");
 
 
         if (ret < sizeof(struct psan_ctrl_t))
-        continue;
+            continue;
 
         struct psan_ctrl_t *ctrl = (struct psan_ctrl_t *)buf;
         struct outstanding_t *out;
 
         if (!(out = remove_outstanding(ntohs(ctrl->seq))))
-        continue;
+            continue;
 
         int error = 1;
 
-        if (out->nbd->type == NBD_CMD_READ
-        && ctrl->cmd == PSAN_GET_RESPONSE
-        && ret == sizeof(struct psan_get_response_t) + out->nbd->len)
-        error = 0;
-        else if (out->nbd->type == NBD_CMD_WRITE
-        && ctrl->cmd == PSAN_PUT_RESPONSE)
-        error = 0;
+        if (out->nbd->type == NBD_CMD_READ  && ctrl->cmd == PSAN_GET_RESPONSE  && ret == sizeof(struct psan_get_response_t) + out->nbd->len)
+            error = 0;
+        else if (out->nbd->type == NBD_CMD_WRITE && ctrl->cmd == PSAN_PUT_RESPONSE)
+            error = 0;
 
         /* XXX: this is a dodgy hack.
          * sometimes the SC101 responds with unexpected data,
@@ -459,8 +456,8 @@ void psan_attach_nbd(char *id, char *path)
          */
         if (error)
         {
-        record_outstanding(out);
-        continue;
+                record_outstanding(out);
+                continue;
         }
 
         struct nbd_reply reply = {
@@ -482,7 +479,7 @@ void psan_attach_nbd(char *id, char *path)
         .msg_iovlen  = iov_len
         };
 
-        if ((ret = _sendmsg(socks[1], &msghdr, 0)) < 0)
+        if ((ret = _sendmsg(socks[1], &msghdr, 0)) < 0) //send to "socks[1]" the message
         err(EXIT_FAILURE, "sendmsg");
 
         free(out->nbd);
@@ -490,14 +487,13 @@ void psan_attach_nbd(char *id, char *path)
         free(out);
     }
 
-    resubmit_outstanding(sock, &res->part_addr);
+    resubmit_outstanding(sock, &res->part_addr); //resubmit to "sock" outstanding
     }
 
     return;
 }
 
-
-void psan_detach_nbd( char *path)
+/*void psan_detach_nbd( char *path)
 {
     if (nbd_fd < 0 )
     err(EXIT_FAILURE, "not open");
@@ -517,8 +513,7 @@ void psan_detach_nbd( char *path)
     close( nbd_fd );
 
     exit( EXIT_SUCCESS );
-}
-
+}*/
 
 #endif
 
@@ -564,6 +559,8 @@ int main(int argc, char *argv[])
 #if USE_NBD
     else if (!strcmp(cmd, "attach") && args == 2)
     psan_attach_nbd(argv[optind], argv[optind+1]);
+    /*else if (!strcmp(cmd, "detach") && args == 1)
+    psan_detach_nbd(argv[optind]);*/
 #endif
     else
     usage();

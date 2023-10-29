@@ -1,0 +1,13 @@
+[Unit]
+Description=ut sc101 SAN management program
+Wants=network-online.target
+After=network.target network-online.target
+
+[Service]
+ExecStart=/usr/sbin/ut_mount start
+RemainAfterExit=yes
+ExecStop=/usr/sbin/ut_mount stop
+
+
+[Install]
+WantedBy=multi-user.target

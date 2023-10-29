@@ -12,10 +12,10 @@ DEFINES += -DUSE_NBD $(if $(shell grep NBD_CMD_READ /usr/include/linux/nbd.h 2>/
 endif
 
 OPTIM = -g
-OPTIM += -O2
+OPTIM += -O3
 
 CPPFLAGS = $(INCLUDES) $(DEFINES)
-CFLAGS = -Wall -pedantic -std=c99 $(OPTIM)
+CFLAGS = -Wall -pedantic -std=c18 $(OPTIM)
 
 INSTALL = install -D
 
@@ -36,8 +36,12 @@ include .depend
 
 install: ut
 	$(INSTALL) -m 0755 ut.init $(DESTDIR)$(sysconfdir)/init.d/ut
-	$(INSTALL) -m 0600 /dev/null $(DESTDIR)$(sysconfdir)/uttab
+	$(INSTALL) -m 0600 uttab $(DESTDIR)$(sysconfdir)/uttab
+	$(INSTALL) -m 0664 ut-daemon.service $(DESTDIR)$(sysconfdir)/systemd/system/ut-daemon.service
+	systemctl daemon-reload
+	systemctl enable ut-daemon
 	$(INSTALL) -m 0755 ut $(DESTDIR)$(sbindir)/ut
+	$(INSTALL) -m 0755 ut_mount $(DESTDIR)$(sbindir)/ut_mount
 	$(INSTALL) -m 0644 ut.8 $(DESTDIR)$(man8dir)/ut.8
 	gzip --best --force $(DESTDIR)$(man8dir)/*.8
 
